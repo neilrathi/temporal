@@ -10,4 +10,4 @@ how do humans learn temporal connectives? and do LMs learn in a similar way?
 * `plots` stores the outputs of analysis
 
 ## dependencies
-all of the model training/testing requires the (LOTlib3)[https://github.com/piantado/LOTlib3/] library. you also need numpy.
+all of the model training/testing requires the [LOTlib3](https://github.com/piantado/LOTlib3/) library. you also need numpy.
