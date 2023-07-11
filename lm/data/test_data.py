@@ -7,7 +7,6 @@ import pandas as pd
 import matplotlib.pyplot as plt
 import os
 import statistics
-import scipy.stats
 
 from copy import copy
 
@@ -47,9 +46,9 @@ grammar.add_rule('int', 'context.B2', None, 1.0)
 grammar.add_rule('int', 'context.U', None, 1.0)
 
 """ DEFINE TARGETS """
-# let t ∈ [-100, 100]
-upper_bound = 100
-lower_bound = -100
+# let t ∈ [1, 12]
+upper_bound = 12
+lower_bound = 1
 domain_as_list = range(lower_bound, upper_bound+1)
 
 # w = ⟨before, after, since, until, while⟩
@@ -62,7 +61,7 @@ target_functions = {
     'after': lambda context: lt_(context.B1, context.A2),
     'since': lambda context: and_(and_(lt_(context.A1, context.U), lte_(context.U, context.A2)), and_(lte_(context.A1, context.B2), lt_(context.B1, context.U))),
     'until': lambda context: and_(and_(lte_(context.A1, context.U), lt_(context.U, context.A2)), and_(lte_(context.B1, context.A2), lt_(context.U, context.B2))),
-    'while': lambda context: and_(lt_(context.B1, context.A2), lt_(context.A1, context.B2))
+    'while': lambda context: and_(and_(lt_(context.B1, context.A2), lt_(context.A1, context.B2)), and_(lt_(context.A2, context.B2), lt_(context.B1, context.A1)))
 }
 
 # define a context object
@@ -174,7 +173,7 @@ class TemporalLexicon(SimpleLexicon):
 
 """ DATA GENERATION """
 # creates a list of n (true) utterances for word n
-def test_data(targets, words = words, n = 5):
+def test_data(targets, words = words, n = 500):
     data = {x: {} for x in words}
     for word in data:
         true_count = 0
@@ -182,6 +181,9 @@ def test_data(targets, words = words, n = 5):
         while true_count + false_count < 2 * n:
             A = sorted([random.choice(domain_as_list), random.choice(domain_as_list)])
             B = sorted([random.choice(domain_as_list), random.choice(domain_as_list)])
+
+            if (A[0] == A[1]) or (B[0] == B[1]):
+                continue
 
             U = random.choice(domain_as_list)
 
@@ -201,79 +203,25 @@ def test_data(targets, words = words, n = 5):
                     false_count += 1
     return data
 
-print('generating data...')
 
+print('initializing lexicon...')
 target_lex = TemporalLexicon(target_functions, word_weights = uniform_weights)
 
+print('creating test data...')
 test = test_data(target_lex)
 
-files = []
-for filename in os.listdir('data/uniform-uniform'):
-    f = os.path.join('data/uniform-uniform', filename)
-    # checking if it is a file
-    if os.path.isfile(f) and '.pkl' in filename:
-        files.append(f)
+outputs = []
 
-def f1(tp, fp, fn):
-    return tp / (tp + 0.5*(fp + fn))
+print('writing to file...')
+for word in test:
+    for context in test[word]:
+        outputs.append([word, test[word][context], context.A1, context.A2, context.B1, context.B2, context.U])
 
-accuracy_list = []
-
-print('testing models...')
-
-for file in files:
-    with open(file, 'rb') as f:
-        data = pickle.load(f)
-
-    model_accuracy = {x : [] for x in words}
-
-    for epoch in data:
-        ct = {x : 0 for x in words}
-        tp = {x : 0 for x in words}
-        fp = {x : 0 for x in words}
-        fn = {x : 0 for x in words}
-        topn = epoch['top_n'].get_all(sorted=True)
-        for word in test:
-            for lexicon in topn:
-                for context in test[word]:
-                    correct_value = test[word][context]
-                    test_value = lexicon(word, context)
-                    if (test_value == correct_value) and (test_value == True):
-                        tp[word] += 1
-                    elif (test_value != correct_value) and (test_value == True):
-                        fp[word] += 1
-                    elif (test_value != correct_value) and (test_value == False):
-                        fn[word] += 1
-            model_accuracy[word].append(tp[word] / (tp[word] + 0.5*(fp[word] + fn[word])))
-    accuracy_list.append(model_accuracy)
-
-accuracy = {word : [] for word in accuracy_list[0].keys()}
-
-num_models = len(accuracy_list)
-
-for model in accuracy_list:
-    for word in accuracy:
-        accuracy[word].append(model[word])
-
-def find_confidence_interval(data, confidence = 0.95):
-    a = 1.0 * np.array(data)
-    m, se = np.mean(a), scipy.stats.sem(a)
-    h = se * scipy.stats.t.ppf((1 + confidence) / 2., len(a)-1)
-    return m, m-h, m+h
-
-def mean_confidence_interval(data, confidence=0.95):
-    return [find_confidence_interval(i) for i in list(zip(*data))]
-
-confidence_intervals = {word : mean_confidence_interval(accuracy[word]) for word in accuracy}
-
-with open('results/before-after-LOT.csv', 'w') as outfile:
-    writer = csv.writer(outfile, delimiter = '\t')
-    writer.writerow(['data', 'word', 'mean', 'low', 'high'])
-    for word in confidence_intervals:
-        i = 0
-        x = range(0, 650, 25)
-        for y in confidence_intervals[word]:
-            writer.writerow([x[i], word, y[0], y[1], y[2]])
-            i += 1
+with open('test.csv', 'w') as f:
+    writer = csv.writer(f, delimiter = '\t')
+    for l in outputs:
+        passage = f''
+        Alice started cooking at {l[2]} and stopped cooking at {l[3]}. Bob started swimming at {l[4]} and stopped swimming at {l[5]}. Alice cooked {l[0]} Bob swam.'
+        writer.writerow([l[0], l[1], passage])
 
 print('done')

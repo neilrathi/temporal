@@ -13,11 +13,11 @@ from LOTlib3.TopN import TopN
 from LOTlib3.Samplers.MetropolisHastings import MetropolisHastingsSampler
 from LOTlib3.Miscellaneous import flip
 
-print('=== Initializing... ===')
+print('=== initializing... ===')
 """ DEFINE PCFG """
 grammar = Grammar()
 
-# initialize: START → λ A B t . BOOL
+# initialize: START → λ A B u . BOOL
 grammar.add_rule('START', '', ['BOOL'], 1.0)
 
 # terminations: BOOL → true / false
@@ -34,7 +34,7 @@ grammar.add_rule('BOOL', 'eq_', ['int', 'int'], 1.00)
 grammar.add_rule('BOOL', 'lt_', ['int', 'int'], 1.00)
 grammar.add_rule('BOOL', 'lte_', ['int', 'int'], 1.00)
 
-# intervals: int → a1 / b1 / a2 / b2 / t
+# intervals: int → a1 / b1 / a2 / b2 / u
 grammar.add_rule('int', 'context.A1', None, 1.0)
 grammar.add_rule('int', 'context.B1', None, 1.0)
 grammar.add_rule('int', 'context.A2', None, 1.0)
@@ -42,7 +42,7 @@ grammar.add_rule('int', 'context.B2', None, 1.0)
 grammar.add_rule('int', 'context.U', None, 1.0)
 
 """ DEFINE TARGETS """
-# let t ∈ [-100, 100]
+# let u ∈ [-100, 100]
 upper_bound = 100
 lower_bound = -100
 domain_as_list = range(lower_bound, upper_bound+1)
@@ -51,7 +51,7 @@ domain_as_list = range(lower_bound, upper_bound+1)
 words = ['before', 'after', 'since', 'until', 'while']
 uniform_weights = {word: 1 for word in words}
 
-# m = ⟨m1,..., m5⟩
+# target meanings m = ⟨m1,..., m5⟩
 target_functions = {
     'before': lambda context: lt_(context.A1, context.B1), 
     'after': lambda context: lt_(context.B1, context.A2),
@@ -60,7 +60,9 @@ target_functions = {
     'while': lambda context: and_(lt_(context.B1, context.A2), lt_(context.A1, context.B2))
 }
 
-# define a context object
+""" PRELIMINARY OBJECTS """
+
+# a context consists of two events A, B and an utterance U
 class Context(object):
     def __init__(self, **kwargs):
         self.__dict__.update(kwargs)
@@ -68,7 +70,6 @@ class Context(object):
     def __str__(self):
         return str(self.__dict__)
 
-# define a hypothesis object
 class MyHypothesis(LOTHypothesis):
     # inherit from LOTHypothesis
     def __init__(self, grammar = grammar, **kwargs):
@@ -84,75 +85,64 @@ class TemporalLexicon(SimpleLexicon):
         self.alpha = alpha
         self.word_weights = word_weights
 
+    # evaluates a lexicon on a given context (boolean output)
     def __call__(self, utterance, context):
-        """
-                Evaluate this lexicon on a possible utterance, passing the context as an argument
-        """
         return self.value[utterance](context)
 
     def __hash__(self):
         return hash(str(self))
 
+    # copies to a new temporal lexicon
     def __copy__(self):
-        """ Copy a.valueicon. We don't re-create the fucntions since that's unnecessary and slow"""
         new = type(self)(value = self.value, alpha = self.alpha)
         for w in self.all_words():
             new.set_word(w, copy(self.get_word(w)))
 
-        # And copy everything else
         for k in self.__dict__.keys():
             if k not in ['self', 'value']:
                 new.__dict__[k] = copy(self.__dict__[k])
 
+    # partitions a list of utterances into true / false ones for a given context
     def partition_utterances(self, utterances, context):
-        """
-        Take some utterances and a context. Returns 2 lists, giving those utterances
-        that are true/false.
-        """
         trues, falses = [], []
         for u in utterances:
-            ret = self(u,context)
+            ret = self(u, context)
             if ret: trues.append(u)
             else: falses.append(u)
         return trues, falses
 
+    # computes p(u | m, c) for an individual utterance u
     def compute_single_likelihood(self, udi):
         assert isinstance(udi, UtteranceData)
         
-        u = udi.utterance
+        u = udi.utterance # extracts utterance from an utterance object
         word_weight = self.word_weights[u]
         trues, falses = self.partition_utterances(udi.possible_utterances, udi.context)
         met_weight = len(trues) + len(falses)
         if u in trues:
+            # (α * w)/|true(c)| + (1-α)*(w)/|w|
             p = ((self.alpha * word_weight) / len(trues)) + ((1 - self.alpha) * word_weight) / met_weight
         else:
+            # (1-α)*(w)/|w|
             p = ((1 - self.alpha) * word_weight) / met_weight
 
         return np.log(p)
 
+    # compares two lexicons
     def __eq__(self, other):
-        """ Compare hypotheses for each word in lexicon
-        """
         if not isinstance(other, self.__class__): return False
         for word in self.all_words():
             if self.get_word(word) != other.get_word(word):
                 return False
         return True
 
+    # proposes to the lexicon by flipping a coin for each word and proposing to it
     def propose(self):
-        """
-        Propose to the lexicon by flipping a coin for each word and proposing to it.
-
-        This permits ProposalFailExceptions on individual words, but does not return a lexicon
-        unless we can propose to something.
-        """
-
-
         fb = 0.0
         changed_any = False
 
         while not changed_any:
-            new = TemporalLexicon({**self.value}) ## Now we just copy the whole thing
+            new = TemporalLexicon({**self.value})
 
             for w in self.all_words():
                     if flip(self.propose_p):
@@ -179,7 +169,7 @@ def train_data(word, targets, n = 500):
 
         U = random.choice(domain_as_list)
 
-        context = Context(A1=A[0], A2=A[1], B1=B[0], B2=B[1], U=U)
+        context = Context(A1 = A[0], A2 = A[1], B1 = B[0], B2 = B[1], U = U)
 
         if target_functions[word](context):
             udi = UtteranceData(context = context, utterance = word, possible_utterances = words)
@@ -203,9 +193,13 @@ def make_data(target_lex, option='uniform', n = 100):
 
     return data
 
-def get_counts(words, n = 100000):
+# generates utterance weights a la Piantadosi et al. (2012)
+def weight(words, nu = 0.25, n = 100000):
+    # initialize an empty count dict
     counts = {word : 0 for word in words}
+
     for i in range(n):
+        # generates a random context
         A = sorted([random.choice(domain_as_list), random.choice(domain_as_list)])
         B = sorted([random.choice(domain_as_list), random.choice(domain_as_list)])
 
@@ -213,30 +207,31 @@ def get_counts(words, n = 100000):
 
         context = Context(A1 = A[0], A2 = A[1], B1 = B[0], B2 = B[1], D1 = lower_bound, D2 = upper_bound + 1, U = U)
 
+        # evaluates target function on each context
         for word in words:
             if target_functions[word](context):
                 counts[word] += 1
 
-    return counts
+    # pt(word) = probability that word is true in an 'average' context
+    # weight is inversely proportional to pt with a smoothing term nu
+    return {word : (1 / float(nu + counts[word]/float(n))) for word, count in counts.items()}
 
-# create a weighted dictionary for all words
-def weight(prob):
-    return 1 / float(0.5 + prob)
+informativeness_weights = weight(words)
+factor = 5.0 / sum(informativeness_weights.values())
+for w in informativeness_weights:
+    informativeness_weights[w] = informativeness_weights[w] * factor
 
-def get_weights(words, n = 100000):
-    count_dict = get_counts(words, n = n)
-    return {word: weight(count / float(n)) for word, count in count_dict.items()}
+print('Weighted:', informativeness_weights)
 
-word_weight_dict = get_weights(words)
-
-""" MODEL TIME! """
+""" MODEL TRAINING """
 def increment_model(target_lex, weights, option = 'uniform', max_data = 1000, increment = 10):
     results = []
     total_data = []
     last_hypothesis = None
+    iteration = 1
     
     for x in range(0, max_data, increment):
-        print("Incrementing...")
+        print(f'training iteration {iteration}...')
         # add incrementally more data
         amount = x + increment
 
@@ -247,50 +242,39 @@ def increment_model(target_lex, weights, option = 'uniform', max_data = 1000, in
         else:
             init = last_hypothesis
 
-        # create new training dataset
+        # create new training data
         new_data = make_data(target_lex, n = increment, option = option)
         total_data += new_data
 
-        # run model for 20k steps and collect top 20 hypotheses
-        unique_lex = set()
-        topn = TopN(N = 20) # store the top N
+        # run MH for 50k steps and collect top 10 hypotheses
+        topn = TopN(N = 10)
 
         for h in MetropolisHastingsSampler(init, total_data, steps = 50000):
             topn.add(h)
-            unique_lex.add(h)
 
-        # get measurements
-        last_hypothesis = h
-        last_likelihood = last_hypothesis.compute_likelihood(total_data)
+        # get metadata
         target_likelihood = target_lex.compute_likelihood(total_data)
         mean_top_likelihood = np.mean([hyp.compute_likelihood(total_data) for hyp in topn.get_all()])
-        best = topn.get_all(sorted=True)[-1]
         likelihood_ratio = round(target_likelihood / mean_top_likelihood, 2)
 
-        print(option, amount, target_likelihood, last_likelihood, mean_top_likelihood, likelihood_ratio)
-        print(best)
+        print(f'data: {amount}, ratio: {likelihood_ratio}\n')
 
         result = {'data_amount': amount,
                   'likelihood_ratio': likelihood_ratio,
-                  'top_n': topn,
-                  'unique_lex': unique_lex,
-                  'last_h': last_hypothesis,
-                  'option': option,
-                  'mean_top_likelihood': mean_top_likelihood,
-                  'last_likelihood': last_likelihood,
-                  'target_likelihood': target_likelihood}
+                  'top_n': topn}
 
         results.append(result)
+        iteration += 1
 
     return results
 
-def run_model(option = 'uniform', weight_option = 'uniform', max_data = 1000, increment = 50, iter_n = 1):
-    file = f'data/{option}/{option}-{max_data}-{increment}-{iter_n}.pkl'
+def run_model(option = 'childes', weight_option = 'weighted', max_data = 1000, increment = 50, iter_n = 1):
+    file = f'data/{option}-{weight_option}/{option}-{max_data}-{increment}-{iter_n}.pkl'
 
     if weight_option == 'uniform':
         weights = uniform_weights
     elif weight_option == 'weighted':
-        weights = word_weight_dict
+        weights = informativeness_weights
 
     target_lex = TemporalLexicon(target_functions, word_weights = weights)
     result = increment_model(target_lex, weights, option = option, max_data = max_data, increment = increment)
@@ -298,19 +282,11 @@ def run_model(option = 'uniform', weight_option = 'uniform', max_data = 1000, in
     with open(file, 'wb') as f:
         pickle.dump(result, f)
 
-    print(f'=== Done! See {file} for data ===')
+    print(f'=== done with iteration {iter_n}! see {file} for data ===')
     return
 
 if __name__ == '__main__':
     for x in range(25):
-        run_model(option='uniform', weight_option='uniform', max_data = 120, increment = 5, iter_n=x+1)
+        run_model(option='childes', weight_option='weighted', max_data = 120, increment = 5, iter_n=x+1)
 
-"""
-    import pickle
-
-    with open('uniform-130-5-3.pkl', 'rb') as f:
-        data = pickle.load(f)
-
-    for result in data:
-        print(result['data_amount'], result['likelihood_ratio'])
-"""
+    print('=== ALL ITERATIONS COMPLETED! ===')
